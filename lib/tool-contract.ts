@@ -1,0 +1,30 @@
+import { GarminError,historyWindow,validateDate,SECTIONS,dateWindow } from './garmin';
+export const PROJECT_INSTRUCTIONS='At the start of each new conversation in this health project, before answering my first message, use Garmin Health Connection to call get_daily_update. This returns the latest available daily wellness record and workouts from the last 24 hours. Use it alongside my goals, food logs, and current plan; show the date and fetch time briefly. Do not fetch a week of history by default. When I ask about an older date or trend, use get_health_history with the specific date range and only relevant sections; follow next_start_date for longer ranges. Use get_activities to find older workouts and get_activity_details for measured detail and associated workout steps. Missing data is unknown, not zero. If I just synced a workout, use force_refresh. If a tool is unavailable, say so. Opening a blank chat does not trigger a fetch; use the tool before your first reply.';
+const annotation={readOnlyHint:true,destructiveHint:false,openWorldHint:true};
+const force={type:'boolean',default:false};
+const date={type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$',description:'Inclusive calendar date YYYY-MM-DD; America/New_York.'};
+const schema=(properties:object,required:string[]=[])=>({type:'object',properties,required,additionalProperties:false});
+export const TOOLS=[
+  {name:'get_daily_update',description:'Default first call in a new health-project conversation. Returns the latest daily wellness record per section and workouts from the last 24 hours. Small snapshot, not a cross-chat change feed. Show dates and fetch time. Refresh after a newly synced workout.',inputSchema:schema({force_refresh:force}),annotations:annotation},
+  {name:'get_health_context',description:'Fetch recent calendar days only when requested. Default one calendar day; up to 31. For new chats prefer get_daily_update; for older dates use get_health_history.',inputSchema:schema({days:{type:'integer',minimum:1,maximum:31,default:1},force_refresh:force}),annotations:annotation},
+  {name:'get_health_history',description:'Fetch an explicit historical date range, only when requested. Choose relevant sections. Returns at most 31 calendar days per call; follow next_start_date with the same requested end_date until null. Historical availability depends on Garmin, not the cache.',inputSchema:schema({start_date:date,end_date:date,sections:{type:'array',minItems:1,uniqueItems:true,items:{type:'string',enum:[...SECTIONS]}}},['start_date','end_date']),annotations:annotation},
+  {name:'get_activities',description:'Find workouts over any explicit past date range, optionally by Garmin activity_type such as running, cycling, or strength_training. Paginated; follow next_offset until null. Use activityId with get_activity_details. No routes or workout names.',inputSchema:schema({start_date:date,end_date:date,offset:{type:'integer',minimum:0,default:0},limit:{type:'integer',minimum:1,maximum:100,default:50},activity_type:{type:'string',pattern:'^[a-z][a-z0-9_]{0,79}$'}},['start_date','end_date']),annotations:annotation},
+  {name:'get_activity_details',description:'Retrieve measured detail for one Garmin activity: pace/speed, heart rate, power, cadence, training effect/load, running dynamics, swim and strength totals, and split summaries when available. Optionally associated workout instructions/targets. Missing fields are unknown. Split summaries are not guaranteed individual laps; no raw time-series or GPS routes.',inputSchema:schema({activity_id:{type:'string',pattern:'^[1-9][0-9]{0,19}$'},include_workouts:{type:'boolean',default:true}},['activity_id']),annotations:annotation},
+  {name:'get_connection_status',description:'Check connection and last cached context fetch. Never returns credentials.',inputSchema:schema({}),annotations:annotation},
+];
+export function validateArguments(name:string,input:unknown):Record<string,any>{
+  const tool=TOOLS.find(t=>t.name===name);if(!tool)throw new GarminError('Unknown tool.');
+  if(input===undefined)input={};
+  if(!input||typeof input!=='object'||Array.isArray(input))throw new GarminError('Tool arguments must be an object.');
+  const args={...input} as Record<string,any>, spec=tool.inputSchema;
+  if(Object.keys(args).some(k=>!Object.hasOwn(spec.properties,k)))throw new GarminError('Unknown tool argument.');
+  if(spec.required.some(k=>args[k]===undefined))throw new GarminError('Required tool argument is missing.');
+  for(const key of ['force_refresh','include_workouts'])if(args[key]!==undefined&&typeof args[key]!=='boolean')throw new GarminError(key+' must be boolean.');
+  for(const [key,min,max] of [['days',1,31],['offset',0,10000000],['limit',1,100]] as const)if(args[key]!==undefined&&(!Number.isInteger(args[key])||args[key]<min||args[key]>max))throw new GarminError(`${key} must be an integer from ${min} to ${max}.`);
+  if(name==='get_health_history')historyWindow(args.start_date,args.end_date);
+  if(name==='get_activities'){validateDate(args.start_date);validateDate(args.end_date);if(args.start_date>args.end_date||args.end_date>dateWindow(1).end)throw new GarminError('Use an ordered date range ending no later than today.');}
+  if(args.sections!==undefined&&(!Array.isArray(args.sections)||!args.sections.length||new Set(args.sections).size!==args.sections.length||args.sections.some((s:any)=>!SECTIONS.includes(s))))throw new GarminError('Select one or more supported, unique history sections.');
+  if(args.activity_type!==undefined&&(typeof args.activity_type!=='string'||!/^[a-z][a-z0-9_]{0,79}$/.test(args.activity_type)))throw new GarminError('Invalid activity_type.');
+  if(name==='get_activity_details'&&(typeof args.activity_id!=='string'||!/^[1-9]\d{0,19}$/.test(args.activity_id)))throw new GarminError('activity_id must be a positive identifier string.');
+  return args;
+}
