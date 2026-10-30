@@ -2,15 +2,11 @@
 
 A small, private Garmin-to-ChatGPT connector you can deploy for yourself. Built with Garmin's official Personal API and ChatGPT Sites. Your laptop does not need to stay on.
 
-## Friend setup: intended experience
+## Free access for friends (pilot)
 
-The goal is a shared hosted connector: open an install link in ChatGPT, connect with your own account, enter your Garmin key once on an authenticated setup page, then use it in your health chats. Friends should not need a coding agent or their own deployment.
+**Friends who want to use the author's hosted connector should read [FRIEND-CONNECT.md](FRIEND-CONNECT.md).** The proposed free pilot requires an owner invitation and a ChatGPT account that can connect the plugin or add a custom MCP server. It does not require a deployment by the friend. Cross-account onboarding has not yet been verified. The deployment steps below are the advanced option for independent owners.
 
-**That consumer install flow is not available in this repository yet.** The current implementation is a tested personal connector and developer source. Publishing source does not publish a broadly installable plugin. OpenAI documents Sites plugin sharing for Business/Enterprise teammates; access for unrelated personal accounts must be verified separately. A website viewer invitation alone does not grant plugin access. See [OpenAI MCP sharing](https://learn.chatgpt.com/docs/extend/mcp).
-
-A shared service additionally needs tested cross-account isolation, per-user timezone settings, appropriate credential/consent handling, and confirmation of Garmin's terms for the intended use. Garmin's Personal API is for an individual's own data; its developer program covers organizational multi-user integrations. See [Garmin's FAQ](https://developer.garmin.com/gc-developer-program/personal/personal-faq/).
-
-## Developer option: deploy your own copy
+## Advanced: deploy your own independent copy
 
 Give a coding assistant with **Sites access and a local executor** this prompt:
 
@@ -30,8 +26,11 @@ The assistant handles the deployment; you create your own Garmin Personal API ke
 | `get_activities` | Find workouts over any explicit date range, filtered by type if needed; follow `next_offset`. |
 | `get_activity_details` | Measured activity summary, Garmin split summaries, and optional associated workout steps. |
 | `get_connection_status` | Connection and last cached context fetch time. |
+| `get_extended_health_data` | Body composition, fitness age, zones, hydration, nutrition, menstrual-cycle/pregnancy records, SpO2, heart rate, steps, stress, weight goals, wellness activities and settings. Seven-day pages, or one day with optional HR/SpO2 time series. |
 
 Examples: “Show my sleep and HRV last month.” “Find last year's longest runs.” “Show the measured power, cadence, training effect and split summaries for that workout.”
+
+Also: “Pull all available categories for today.” Extended data is fetched only on request and is not stored by this connector. Each category/date has a fetched/unavailable status. The setup page can check today's response coverage without displaying measurements. Unsupported Personal API fields such as VO2 max and training readiness are not invented. Skin-temperature/sleep-need fields and additional activity measurements are included only when Garmin returns them.
 
 Historical coverage depends on Garmin and the account/device. Long ranges require multiple calls; there is no promise that every metric exists for every past date. Split summaries are not necessarily individual laps. Raw FIT files and per-second time series are not decoded. Associated workout steps describe targets, not proof of completion.
 
@@ -43,7 +42,7 @@ Daily/recent context can be reused for 15 minutes. `force_refresh` bypasses that
 
 ## Privacy and access
 
-- Each person should run their own owner-private copy with their own Garmin key. This repository contains no live deployment identity, key, token, database, or health records.
+- Independent owners can run an owner-private copy. The free friend pilot instead uses explicitly invited accounts and a separate key per person; its cross-account onboarding still needs verification. This repository contains no live deployment identity, key, token, database, or health records.
 - Keys are encrypted with AES-GCM and authenticated to the signed-in user's site-scoped ID. The wrapping secret is a server-only runtime secret, not source code.
 - The server decrypts the key when contacting Garmin. It never returns the key in tool results.
 - The code excludes GPS coordinates, routes, profile identifiers, workout titles, and private notes. It includes exercise names where Garmin provides structured workout steps.

@@ -9,10 +9,13 @@ function loadModule(path,replacements={}){
   return 'data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source,{mode:'transform'})).toString('base64');
 }
 const configURL=loadModule('../lib/config.ts');
-const garminURL=loadModule('../lib/garmin.ts',{'./config':configURL});
+const healthSchemaURL=loadModule('../lib/health-schema.ts');
+const garminURL=loadModule('../lib/garmin.ts',{'./config':configURL,'./health-schema':healthSchemaURL});
 const g=await import(garminURL);
 const {encryptKey,decryptKey}=await import(loadModule('../lib/key-crypto.ts'));
-const {validateArguments,TOOLS}=await import(loadModule('../lib/tool-contract.ts',{'./garmin':garminURL}));
+const extendedURL=loadModule('../lib/extended-health.ts',{'./garmin':garminURL,'./config':configURL,'./health-schema':healthSchemaURL});
+const extended=await import(extendedURL);
+const {validateArguments,TOOLS}=await import(loadModule('../lib/tool-contract.ts',{'./garmin':garminURL,'./extended-health':extendedURL}));
 test('keys are encrypted with unique nonces and bound to their user',async()=>{
   const secret=Buffer.alloc(32,9).toString('base64');const a=await encryptKey('fake-key','user-one',secret),b=await encryptKey('fake-key','user-one',secret);
   assert.notEqual(a,b);assert.ok(!a.includes('fake-key'));assert.equal(await decryptKey(a,'user-one',secret),'fake-key');await assert.rejects(decryptKey(a,'user-two',secret));
@@ -58,6 +61,43 @@ test('activity detail exposes measurements and splits but excludes locations and
   const all=JSON.stringify(result);assert.ok(!all.includes('Private'));assert.ok(!all.includes('startLatitude'));assert.ok(!all.includes('userProfileId'));assert.ok(!all.includes('endLongitude'));
 });
 test('tool arguments reject invalid identifiers, unknown fields, impossible dates, and huge requests',()=>{
-  assert.equal(TOOLS.length,6);assert.deepEqual(validateArguments('get_daily_update',{}),{});
+  assert.equal(TOOLS.length,7);assert.deepEqual(validateArguments('get_daily_update',{}),{});
   for(const [name,args]of [['get_daily_update',{days:31}],['get_health_context',{days:32}],['get_health_context',{force_refresh:'yes'}],['get_activities',{start_date:'2020-02-30',end_date:'2020-03-01'}],['get_activities',{start_date:'2020-01-01',end_date:'2020-02-01',limit:500}],['get_activity_details',{activity_id:'../profile'}],['get_health_history',{start_date:'2020-01-01',end_date:'2020-02-01',sections:['sleep','sleep']}],['get_connection_status',{userId:'someone-else'}]])assert.throws(()=>validateArguments(name,args));
+});
+
+test('extended health projection drops unknown identifiers, notes, and raw series unless requested',()=>{
+  const heart={calendarDate:'2020-01-01',userProfilePK:7,restingHeartRate:0,heartRateValues:[[123,55],[124,null],[125,{private:'secret'}]],notes:'secret'};
+  const shape={ref:'DailyHeartRateDTO'};
+  assert.deepEqual(extended.projectHealth(heart,shape),{calendarDate:'2020-01-01',restingHeartRate:0});
+  const raw=extended.projectHealth(heart,shape,true);assert.deepEqual(raw.heartRateValues,[[123,55],[124,null],[125,null]]);
+  const cycle=extended.projectHealth({dayLog:{calendarDate:'2020-01-01',flow:'LIGHT',userProfilePk:9,notes:'secret'},daySummary:{predictedCycle:true,dayInCycle:3},injected:'secret'},{ref:'DetailedMenstrualCycleDayDTO'});
+  assert.equal(cycle.dayLog.flow,'LIGHT');assert.equal(cycle.daySummary.predictedCycle,true);assert.ok(!JSON.stringify(cycle).includes('secret'));assert.ok(!JSON.stringify(cycle).includes('userProfile'));
+});
+test('extended history is paged, filters requests, preserves partial failures, and bounds concurrency',async()=>{
+  let active=0,maxActive=0;const urls=[];
+  const fetcher=async(url,init)=>{
+    if(init.method==='POST')return new Response('token');urls.push(url);active++;maxActive=Math.max(maxActive,active);await new Promise(r=>setTimeout(r,2));active--;
+    if(url.includes('/2020-01-03?'))return new Response('secret body',{status:403});
+    return Response.json({mealDate:'2020-01-01',dailyNutritionContent:{protein:80,calories:1600},userId:'secret'});
+  };
+  const result=await extended.fetchExtendedHealth('fake','2020-01-01','2020-01-31',['nutrition'],false,fetcher);
+  assert.equal(result.range.end,'2020-01-07');assert.equal(result.next_start_date,'2020-01-08');assert.equal(result.categories.nutrition.length,7);assert.equal(result.sync_status,'partial');assert.equal(maxActive,4);assert.equal(urls.length,7);assert.ok(urls.every(u=>u.includes('includeMedia=false')));assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.equal(extended.extendedWindow('2020-01-01','2020-01-31',1).next_start_date,'2020-01-02');
+});
+test('extended tool rejects foreign categories, duplicate categories and non-boolean series flags',()=>{
+  for(const args of [{categories:['profile']},{categories:['nutrition','nutrition']},{include_time_series:'yes'},{userId:'other'}])assert.throws(()=>validateArguments('get_extended_health_data',{start_date:'2020-01-01',end_date:'2020-01-02',...args}));
+});
+
+test('coverage endpoint rejects anonymous and cross-origin requests before looking up any health data',async()=>{
+  const jsURL=source=>'data:text/javascript;base64,'+Buffer.from(source).toString('base64');
+  const auth=jsURL('export async function getChatGPTUser(){return globalThis.__coverageTestUser;}');
+  const connection=jsURL('export async function extendedHealth(userId){globalThis.__coverageTestLookups.push(userId);return {fetched_at_utc:"2020-01-01T00:00:00Z",categories:{body_composition:[{status:"fetched",metrics:[{weight:60}]}]}};}');
+  const route=await import(loadModule('../app/api/coverage/route.ts',{'../../chatgpt-auth':auth,'../../../lib/connection':connection,'../../../lib/garmin':garminURL}));
+  globalThis.__coverageTestLookups=[];globalThis.__coverageTestUser=null;
+  const request=origin=>new Request('https://connector.example/api/coverage',{method:'POST',headers:{origin}});
+  assert.equal((await route.POST(request('https://connector.example'))).status,401);
+  globalThis.__coverageTestUser={userId:'signed-in-user'};
+  assert.equal((await route.POST(request('https://foreign.example'))).status,403);assert.deepEqual(globalThis.__coverageTestLookups,[]);
+  const result=await route.POST(request('https://connector.example'));assert.equal(result.status,200);assert.equal(result.headers.get('Cache-Control'),'no-store');assert.deepEqual(globalThis.__coverageTestLookups,['signed-in-user']);const body=await result.text();assert.ok(!body.includes('weight'));assert.ok(!body.includes('60'));
+  delete globalThis.__coverageTestUser;delete globalThis.__coverageTestLookups;
 });

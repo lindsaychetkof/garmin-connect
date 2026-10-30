@@ -4,6 +4,7 @@ import { connections } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { fetchContext,GarminError,dateWindow,compactDaily,fetchRange,historyWindow,fetchActivities,fetchActivityDetails,type Section } from './garmin';
 import { encryptKey,decryptKey } from './key-crypto';
+import { fetchExtendedHealth,type ExtendedCategory } from './extended-health';
 function secret(){const value=(env as unknown as Record<string,string>).GARMIN_ENCRYPTION_KEY;if(!value)throw new Error('Server encryption is not configured.');return value;}
 export async function getConnection(userId:string){return (await getDb().select().from(connections).where(eq(connections.userId,userId)).limit(1))[0];}
 export async function saveConnection(userId:string,key:string){const encryptedKey=await encryptKey(key,userId,secret());await getDb().insert(connections).values({userId,encryptedKey}).onConflictDoUpdate({target:connections.userId,set:{encryptedKey,snapshot:null,fetchedAt:null}});}
@@ -22,3 +23,4 @@ export async function dailyUpdate(userId:string,force=false){return cachedContex
 export async function healthHistory(userId:string,start:string,end:string,sections?:Section[]){const window=historyWindow(start,end);return {...await fetchRange(await connectedKey(userId),window.start,window.end,sections),requested_range:{start,end},next_start_date:window.next_start_date,notes:['At most 31 calendar days per call. Follow next_start_date to continue. Garmin determines historical availability. Missing data is unknown, not zero.']};}
 export async function activityList(userId:string,start:string,end:string,offset=0,limit=50,type?:string){return fetchActivities(await connectedKey(userId),start,end,offset,limit,type);}
 export async function activityDetails(userId:string,id:string,includeWorkouts=true){return fetchActivityDetails(await connectedKey(userId),id,includeWorkouts);}
+export async function extendedHealth(userId:string,start:string,end:string,categories?:ExtendedCategory[],includeTimeSeries=false){return fetchExtendedHealth(await connectedKey(userId),start,end,categories,includeTimeSeries);}
