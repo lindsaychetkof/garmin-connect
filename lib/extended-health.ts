@@ -63,7 +63,9 @@ export async function fetchExtendedHealth(key:string,start:string,end:string,cat
   await Promise.all(Array.from({length:Math.min(4,tasks.length)},async()=>{
     while(cursor<tasks.length){const {category,def,day}=tasks[cursor++];let record:any;
       try{
-        const payload=await garminRequest(def.path(day),token,'GET',fetcher);
+        let payload=await garminRequest(def.path(day),token,'GET',fetcher);
+        // Garmin's schema says array, but production also returns a single FitnessAgeDTO.
+        if(category==='fitness_age'&&payload&&typeof payload==='object'&&!Array.isArray(payload)&&Object.keys(payload).some(k=>Object.hasOwn(HEALTH_SCHEMAS.FitnessAgeDTO.properties,k)))payload=[payload];
         if(payload!==null&&((def.array&&!Array.isArray(payload))||(!def.array&&(typeof payload!=='object'||Array.isArray(payload)))))throw new GarminError('Unexpected health response shape.');
         const shape=def.array?{type:'array',items:{ref:def.schema}}:{ref:def.schema};
         record={status:'fetched',...(def.perDay?{calendar_date:day}:{}),...(def.asOf?{as_of:def.asOf}:{}),metrics:projectHealth(payload,shape,includeTimeSeries)};

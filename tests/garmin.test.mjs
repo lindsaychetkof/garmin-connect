@@ -88,6 +88,13 @@ test('extended tool rejects foreign categories, duplicate categories and non-boo
   for(const args of [{categories:['profile']},{categories:['nutrition','nutrition']},{include_time_series:'yes'},{userId:'other'}])assert.throws(()=>validateArguments('get_extended_health_data',{start_date:'2020-01-01',end_date:'2020-01-02',...args}));
 });
 
+test('fitness age accepts both documented arrays and live single-object responses',async()=>{
+  for(const payload of [{fitnessAge:30,chronologicalAge:31,userProfilePk:99},[{fitnessAge:30}]]){
+    const result=await extended.fetchExtendedHealth('fake','2020-01-01','2020-01-01',['fitness_age'],false,async(_url,init)=>init.method==='POST'?new Response('token'):Response.json(payload));
+    assert.equal(result.sync_status,'complete');assert.equal(result.categories.fitness_age[0].metrics[0].fitnessAge,30);assert.ok(!JSON.stringify(result).includes('userProfile'));
+  }
+});
+
 test('coverage endpoint rejects anonymous and cross-origin requests before looking up any health data',async()=>{
   const jsURL=source=>'data:text/javascript;base64,'+Buffer.from(source).toString('base64');
   const auth=jsURL('export async function getChatGPTUser(){return globalThis.__coverageTestUser;}');
